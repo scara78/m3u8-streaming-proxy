@@ -52,23 +52,37 @@ app.get('/health', (req, res) => {
 // Proxy endpoint with caching
 app.get('/api/v1/streamingProxy', async (req, res) => {
   try {
-    const url = decodeURIComponent(req.query.url);
+    // URL is already decoded
+    const url = req.query.url;
+
     if (!url) {
       return res.status(400).json({ error: "URL parameter is required" });
     }
+
+    const isM3U8 = url.endsWith(".m3u8");
 
     // Check cache for the URL
     const cachedResponse = cache.get(url);
     if (cachedResponse) {
       console.log(`Serving from cache: ${url}`);
+      if (isM3U8) {
+        res.set({
+          "Content-Type": "application/vnd.apple.mpegurl",
+          "Cache-Control": "public, max-age=600" // 10 minutes
+        });
+      } else {
+        res.set({
+          "Content-Type": "video/mp2t",
+          "Cache-Control": "public, max-age=31536000" // 1 year for segments
+        });
+      }
       return res.status(200).send(cachedResponse);
     }
 
     const response = await fetchWithCustomReferer(url, env.REFERER_URL);
-    const isM3U8 = url.endsWith(".m3u8");
 
     if (!response.ok) {
-      return res.status(response.status).json({ 
+      return res.status(response.status).json({
         error: response.statusText,
         status: response.status
       });
@@ -100,9 +114,9 @@ app.get('/api/v1/streamingProxy', async (req, res) => {
     }
   } catch (error) {
     console.error('Proxy error:', error);
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: "Failed to fetch data",
-      details: error.message 
+      details: error.message
     });
   }
 });
@@ -110,9 +124,9 @@ app.get('/api/v1/streamingProxy', async (req, res) => {
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Server error:', err.stack);
-  res.status(500).json({ 
+  res.status(500).json({
     error: "Something went wrong!",
-    message: err.message 
+    message: err.message
   });
 });
 
