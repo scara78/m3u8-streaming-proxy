@@ -12,47 +12,59 @@ const { cleanEnv, str, num } = require('envalid');
 // Validate environment variables
 const env = cleanEnv(process.env, {
   PORT: num({ default: 3000 }),
-  ALLOWED_ORIGINS: str({ default: "*" }), // Allow all origins by default
-  REFERER_URL: str({ default: "https://megacloud.club/" })
+  ALLOWED_ORIGINS: str({ default: "*" }), 
+  REFERER_URL: str({ default: "https://streameeeeee.site/" })
 });
 
 const app = express();
 const PORT = env.PORT;
 
-// Initialize cache with a TTL of 10 minutes (600 seconds)
 const cache = new NodeCache({ stdTTL: 600 });
 
-// Logging middleware
 app.use(morgan('dev'));
 
-// Security headers middleware
-app.use(helmet());
+// ==========================================
+// MODIFICARE 1: CONFIGURARE HELMET AGRESIVĂ
+// ==========================================
+app.use(
+  helmet({
+    // Rezolvă eroarea NotSameOrigin permițând încărcarea resursei pe alte domenii
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    // Permite ferestrelor pop-up și playerelor să comunice
+    crossOriginOpenerPolicy: { policy: "unsafe-none" },
+    // Dezactivăm CSP-ul restrictiv care bloca scripturile/media-urile externe
+    contentSecurityPolicy: false,
+  })
+);
 
-// Serve static files from the "public" directory
 app.use(express.static(path.join(__dirname, '../public')));
 
-// CORS middleware - simplified
+// ==========================================
+// MODIFICARE 2: CORS ȘI HEADERE CORP MANUALE
+// ==========================================
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Origin, Accept, Range');
+  
+  // Forțăm browserul să accepte resursa chiar dacă e cerută cross-site
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  
   next();
 });
 
-// Handle CORS preflight requests
 app.options('*', (req, res) => {
   res.status(204).end();
 });
 
-// Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
-// Proxy endpoint with caching
+
+
 app.get('/api/v1/streamingProxy', async (req, res) => {
   try {
-    // URL is already decoded
     const url = req.query.url;
 
     if (!url) {
@@ -61,20 +73,23 @@ app.get('/api/v1/streamingProxy', async (req, res) => {
 
     const isM3U8 = url.endsWith(".m3u8");
 
-    // Check cache for the URL
     const cachedResponse = cache.get(url);
     if (cachedResponse) {
       console.log(`Serving from cache: ${url}`);
+      
+      // ==========================================
+      // MODIFICARE 3: HEADERE CORP ÎN CACHE
+      // ==========================================
+      const commonHeaders = {
+        "Access-Control-Allow-Origin": "*",
+        "Cross-Origin-Resource-Policy": "cross-origin",
+        "Cache-Control": isM3U8 ? "public, max-age=600" : "public, max-age=31536000"
+      };
+
       if (isM3U8) {
-        res.set({
-          "Content-Type": "application/vnd.apple.mpegurl",
-          "Cache-Control": "public, max-age=600" // 10 minutes
-        });
+        res.set({ ...commonHeaders, "Content-Type": "application/vnd.apple.mpegurl" });
       } else {
-        res.set({
-          "Content-Type": "video/mp2t",
-          "Cache-Control": "public, max-age=31536000" // 1 year for segments
-        });
+        res.set({ ...commonHeaders, "Content-Type": "video/mp2t" });
       }
       return res.status(200).send(cachedResponse);
     }
@@ -88,29 +103,36 @@ app.get('/api/v1/streamingProxy', async (req, res) => {
       });
     }
 
+    // Headere comune pentru răspunsurile noi
+    const responseHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Cross-Origin-Resource-Policy": "cross-origin"
+    };
+
     if (isM3U8) {
       const playlistText = await response.text();
       const modifiedPlaylist = rewritePlaylistUrls(playlistText, url);
 
-      // Cache the response
       cache.set(url, modifiedPlaylist);
 
       res.set({
+        ...responseHeaders,
         "Content-Type": "application/vnd.apple.mpegurl",
-        "Cache-Control": "public, max-age=600" // 10 minutes
+        "Cache-Control": "public, max-age=600"
       });
       return res.send(modifiedPlaylist);
     } else {
       const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
 
-      // Cache the response
-      cache.set(url, Buffer.from(arrayBuffer));
+      cache.set(url, buffer);
 
       res.set({
+        ...responseHeaders,
         "Content-Type": "video/mp2t",
-        "Cache-Control": "public, max-age=31536000" // 1 year for segments
+        "Cache-Control": "public, max-age=31536000"
       });
-      return res.send(Buffer.from(arrayBuffer));
+      return res.send(buffer);
     }
   } catch (error) {
     console.error('Proxy error:', error);
@@ -121,7 +143,6 @@ app.get('/api/v1/streamingProxy', async (req, res) => {
   }
 });
 
-// Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Server error:', err.stack);
   res.status(500).json({
